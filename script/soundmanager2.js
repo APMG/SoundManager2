@@ -93,6 +93,7 @@ function SoundManager(smURL, smID) {
     'onid3': null,            // callback function for "ID3 data is added/available"
     'onload': null,           // callback function for "load finished"
     'whileloading': null,     // callback function for "download progress update" (X of Y bytes received)
+    'onseekable': null,         // callback function for when the audio is seekable.
     'onplay': null,           // callback for "play" start
     'onpause': null,          // callback for "pause"
     'onresume': null,         // callback for "resume" (pause toggle)
@@ -1453,7 +1454,7 @@ function SoundManager(smURL, smID) {
 
   SMSound = function(oOptions) {
 
-    var s = this, resetProperties, add_html5_events, remove_html5_events, stop_html5_timer, start_html5_timer, attachOnPosition, onplay_called = false, onPositionItems = [], onPositionFired = 0, detachOnPosition, applyFromTo, lastURL = null, lastHTML5State, urlOmitted;
+    var s = this, resetProperties, add_html5_events, remove_html5_events, stop_html5_timer, start_html5_timer, attachOnPosition, onseekable_called = false, onplay_called = false, onPositionItems = [], onPositionFired = 0, detachOnPosition, applyFromTo, lastURL = null, lastHTML5State, urlOmitted;
 
     lastHTML5State = {
       // tracks duration + position (time)
@@ -2008,6 +2009,15 @@ function SoundManager(smURL, smID) {
 
           }
 
+          // If flash, we can seek immediately.
+          if (!s.onseekable_called) {
+            sm2._wD(fN + 'Fired onseekable callback.', 1);
+            if (s._iO.onseekable) {
+              s._iO.onseekable.apply(s);
+              s.onseekable_called = true;
+            }
+          }
+
         } else {
 
           if (s.instanceCount < 2) {
@@ -2021,6 +2031,35 @@ function SoundManager(smURL, smID) {
             s.setPosition(s._iO.position);
 
             a.play();
+
+            // If html5, we need to wait for a couple of conditions to be true to be able to seek.
+            var checkDuration = function() {
+
+              var isOld_iOS = (is_iDevice && !!(ua.match(/os (1|2|3|4|5)/i)));
+
+              // In iOS 5 and older, you need to wait until the canplaythrough event to seek.
+              // On other devices, we can wait for an event with duration > 0.
+              // onseekable is not called on live audio.
+              if (a.duration > 0 && s._html5_canplay) {
+                if ((isOld_iOS && s._html5_canplaythrough) || !isOld_iOS) {
+                  if (s._iO.onseekable) {
+                    s._iO.onseekable.apply(s);
+                    s.onseekable_called = true;
+                  }
+
+                  sm2._wD(fN + 'Fired onseekable callback.', 1);
+                  event.remove(a, 'canplay', checkDuration);
+                  event.remove(a, 'durationchange', checkDuration);
+                  event.remove(a, 'canplaythrough', checkDuration);
+                }
+              }
+            }
+
+            event.add(a, 'canplay', checkDuration);
+            event.add(a, 'durationchange', checkDuration);
+            event.add(a, 'canplaythrough', checkDuration);
+            // Call checkDuration now for good measure.
+            checkDuration();
 
           } else {
 
@@ -2743,6 +2782,7 @@ function SoundManager(smURL, smID) {
       s._hasTimer = null;
       s._a = null;
       s._html5_canplay = false;
+      s._html5_canplaythrough = false;
       s.bytesLoaded = null;
       s.bytesTotal = null;
       s.duration = (s._iO && s._iO.duration ? s._iO.duration : null);
@@ -3785,11 +3825,23 @@ console.log('updated metadata', s.metadata);
 
       var s = this._s;
 
+      sm2._wD(s.id + ': canplaythrough');
+
+      s._html5_canplaythrough = true;
+
       if (!s.loaded) {
         s._onbufferchange(0);
         s._whileloading(s.bytesLoaded, s.bytesTotal, s._get_html5_duration());
         s._onload(true);
       }
+
+    }),
+
+    durationchange: html5_event(function() {
+
+      var s = this._s;
+
+      sm2._wD(s.id + ': durationchange. Duration is ' + this.duration);
 
     }),
 
